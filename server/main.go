@@ -8,19 +8,27 @@ import (
 	"time"
 
 	"github.com/gocolly/colly"
+	"github.com/rs/cors"
 )
 
-type BTCInfo struct {
-	Title string `json:"title"`
-	Price string `json:"price"`
+type Price struct {
+	BTC string `json:"BTC"`
+	LTC string `json:"LTC"`
+	ADA string `json:"ADA"`
+}
+
+type CoinInfo struct {
+	Prices Price `json:"prices"`
 }
 
 var (
-	btcinfo BTCInfo
-	mu      sync.Mutex
+	coinInfo CoinInfo
+	mu       sync.Mutex
 )
 
-func scrapeBitcoinData() {
+func scrapeCoinData(symbol string) {
+	site := "https://coinmarketcap.com/currencies/%s"
+	fullUrl := fmt.Sprintf(site, symbol)
 	c := colly.NewCollector(colly.AllowedDomains("www.coinmarketcap.com", "coinmarketcap.com"))
 
 	c.OnRequest(func(r *colly.Request) {
@@ -31,43 +39,59 @@ func scrapeBitcoinData() {
 		fmt.Printf("Error while scraping: %s\n", e.Error())
 	})
 
-	c.OnHTML("span.lsTl", func(h *colly.HTMLElement) {
-		mu.Lock()
-		btcinfo.Title = h.Text
-		mu.Unlock()
-	})
-
 	c.OnHTML("span.clvjgF", func(h *colly.HTMLElement) {
-		mu.Lock()
-		btcinfo.Price = h.Text
-		mu.Unlock()
+		switch symbol {
+			case "bitcoin":
+				mu.Lock()
+				coinInfo.Prices.BTC = h.Text
+				mu.Unlock()
+			case "litecoin":
+				mu.Lock()
+				coinInfo.Prices.LTC = h.Text
+				mu.Unlock()
+			case "cardano":
+				mu.Lock()
+				coinInfo.Prices.ADA = h.Text
+				mu.Unlock()
+		}
 	})
 
 	c.OnScraped(func(r *colly.Response) {
 		mu.Lock()
-		fmt.Printf("\rTitle: %s, Price: %s", btcinfo.Title, btcinfo.Price)
+		fmt.Printf("\rBTC Price: %s, LTC Price: %s, ADA Price: %s", coinInfo.Prices.BTC, coinInfo.Prices.LTC, coinInfo.Prices.ADA)
 		mu.Unlock()
 	})
 
-	c.Visit("https://coinmarketcap.com/currencies/bitcoin/")
+	c.Visit(fullUrl)
 }
 
-func btcHandler(w http.ResponseWriter, r *http.Request) {
+func coinHandler(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(btcinfo)
+	json.NewEncoder(w).Encode(coinInfo)
 }
 
 func main() {
 	go func() {
 		for {
-			scrapeBitcoinData()
-			time.Sleep(5 * time.Second)
+			scrapeCoinData("bitcoin")
+			scrapeCoinData("litecoin")
+			scrapeCoinData("cardano")
+			time.Sleep(10 * time.Second)
 		}
 	}()
 
-	http.HandleFunc("/btc", btcHandler)
+	handler := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedMethods:   []string{"GET"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}).Handler(http.DefaultServeMux)
+
+	http.HandleFunc("/coins", coinHandler)
 	fmt.Println("Starting server on :8080")
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":8080", handler)
 }
